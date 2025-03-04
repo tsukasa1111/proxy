@@ -1,13 +1,15 @@
 import sys
 import os
 import tempfile
+import urllib.request
+import urllib.parse
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QMessageBox,
     QTableWidget, QTableWidgetItem, QSpinBox, QHeaderView,
     QDialog, QScrollArea, QComboBox
 )
-from PyQt5.QtCore import QUrl, Qt
+from PyQt5.QtCore import QUrl, Qt, QSize
 from PyQt5.QtGui import QDesktopServices, QPixmap, QIcon
 
 from reportlab.lib.pagesizes import A4, A3, portrait, landscape
@@ -99,6 +101,7 @@ class CardProxyApp(QWidget):
         # 選択した画像と数量を表示するテーブル
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["画像ファイル", "印刷枚数"])
+        self.table.setIconSize(QSize(96, 96))  # アイコンサイズを96x96に設定
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -147,10 +150,10 @@ class CardProxyApp(QWidget):
         item = QTableWidgetItem(base_name)
         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
         item.setData(Qt.UserRole, file)
-        # サムネイル画像を作成してアイコンとして設定（サイズは64x64）
+        # サムネイル画像を作成してアイコンとして設定（サイズは96x96）
         pixmap = QPixmap(file)
         if not pixmap.isNull():
-            thumb = pixmap.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            thumb = pixmap.scaled(96, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             item.setIcon(QIcon(thumb))
         self.table.setItem(row, 0, item)
         # 印刷枚数はQSpinBoxで設定（初期値は1）
@@ -158,6 +161,8 @@ class CardProxyApp(QWidget):
         spin.setMinimum(1)
         spin.setValue(1)
         self.table.setCellWidget(row, 1, spin)
+        # 行の高さを調整（96+適宜の余白を含める）
+        self.table.setRowHeight(row, 110)
     
     def remove_selected(self):
         selected = self.table.selectedItems()
@@ -192,14 +197,12 @@ class CardProxyApp(QWidget):
     def show_image_dialog(self, file_path):
         dialog = QDialog(self)
         dialog.setWindowTitle(os.path.basename(file_path))
-        
         scroll = QScrollArea(dialog)
         label = QLabel()
         pixmap = QPixmap(file_path)
         label.setPixmap(pixmap)
         label.setScaledContents(True)
         scroll.setWidget(label)
-        
         layout = QVBoxLayout(dialog)
         layout.addWidget(scroll)
         dialog.resize(800, 600)
@@ -210,7 +213,6 @@ class CardProxyApp(QWidget):
         if not image_quantity_list:
             QMessageBox.critical(self, "エラー", "画像が選択されていません")
             return
-        # 選択されたページサイズを取得
         page_option = self.page_combo.currentText()
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
         temp_file.close()
@@ -223,7 +225,6 @@ class CardProxyApp(QWidget):
             QMessageBox.critical(self, "エラー", "画像が選択されていません")
             return
         page_option = self.page_combo.currentText()
-        # 保存ダイアログの初期ファイル名を "output.pdf" に設定
         file_path, _ = QFileDialog.getSaveFileName(
             self, "保存先を選択", "output.pdf", "PDF Files (*.pdf)"
         )
@@ -240,13 +241,51 @@ class CardProxyApp(QWidget):
     
     def dropEvent(self, event):
         for url in event.mimeData().urls():
-            file = url.toLocalFile()
-            if file.lower().endswith((".jpg", ".png")):
-                self.add_image_to_table(file)
+            print("Dropped URL:", url.toString())  # デバッグ出力
+            local_file = url.toLocalFile()
+            if local_file and os.path.exists(local_file):
+                file_path = local_file
+            else:
+                remote_url = url.toString()
+                print("Remote URL:", remote_url)  # デバッグ出力
+                # 相対パスの場合、ドメインを付与（サイト固有の変換例）
+                if remote_url.startswith("/"):
+                    remote_url = "https://dm.takaratomy.co.jp" + remote_url
+                    print("Converted to absolute URL:", remote_url)
+                # URLが詳細ページの場合、サムネイル画像のURLに変換
+                if "card/detail/" in remote_url:
+                    parsed = urllib.parse.urlparse(remote_url)
+                    qs = urllib.parse.parse_qs(parsed.query)
+                    if "id" in qs:
+                        card_id = qs["id"][0]
+                        remote_url = "https://dm.takaratomy.co.jp/wp-content/card/cardthumb/" + card_id + ".jpg"
+                        print("Converted detail URL to image URL:", remote_url)
+                # 拡張子チェックはせずに、仮の拡張子を付与
+                ext = os.path.splitext(remote_url)[1]
+                if not ext:
+                    ext = ".jpg"
+                temp_fd, temp_path = tempfile.mkstemp(suffix=ext)
+                os.close(temp_fd)
+                try:
+                    req = urllib.request.Request(remote_url, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req) as response, open(temp_path, 'wb') as out_file:
+                        out_file.write(response.read())
+                    file_path = temp_path
+                except Exception as e:
+                    QMessageBox.warning(self, "エラー", f"画像のダウンロードに失敗しました:\n{e}")
+                    continue
+            print("File path:", file_path)  # デバッグ出力
+            # QPixmapで画像として読み込めるかチェック
+            pixmap = QPixmap(file_path)
+            if pixmap.isNull():
+                QMessageBox.warning(self, "エラー", "ダウンロードしたファイルが画像として読み込めませんでした。")
+                continue
+            self.add_image_to_table(file_path)
         event.acceptProposedAction()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = CardProxyApp()
+    window.resize(800, 600)
     window.show()
     sys.exit(app.exec_())
