@@ -3,6 +3,7 @@ import os
 import tempfile
 import urllib.request
 import urllib.parse
+import re
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QMessageBox,
@@ -78,8 +79,7 @@ class CardProxyApp(QWidget):
         super().__init__()
         self.setWindowTitle("プロキシ生成ツール")
         self.setAcceptDrops(True)
-        # 一時ファイルのパスを保存するリスト
-        self.temp_files = []
+        self.temp_files = []  # 一時ファイルのパスを保持するリスト
         self.init_ui()
         
     def init_ui(self):
@@ -204,7 +204,6 @@ class CardProxyApp(QWidget):
         temp_file.close()
         create_pdf(image_quantity_list, temp_file.name, page_option)
         QDesktopServices.openUrl(QUrl.fromLocalFile(temp_file.name))
-        # プレビュー用PDFも一時ファイルリストに追加
         self.temp_files.append(temp_file.name)
     
     def generate_pdf(self):
@@ -238,28 +237,55 @@ class CardProxyApp(QWidget):
                 if remote_url.startswith("/"):
                     remote_url = "https://dm.takaratomy.co.jp" + remote_url
                     print("Converted to absolute URL:", remote_url)
+                # 詳細ページURLの場合、サムネイル画像URLに変換
                 if "card/detail/" in remote_url:
                     parsed = urllib.parse.urlparse(remote_url)
                     qs = urllib.parse.parse_qs(parsed.query)
                     if "id" in qs:
                         card_id = qs["id"][0]
-                        remote_url = "https://dm.takaratomy.co.jp/wp-content/card/cardthumb/" + card_id + ".jpg"
-                        print("Converted detail URL to image URL:", remote_url)
-                ext = os.path.splitext(remote_url)[1]
-                if not ext:
-                    ext = ".jpg"
-                temp_fd, temp_path = tempfile.mkstemp(suffix=ext)
-                os.close(temp_fd)
-                try:
-                    req = urllib.request.Request(remote_url, headers={'User-Agent': 'Mozilla/5.0'})
-                    with urllib.request.urlopen(req) as response, open(temp_path, 'wb') as out_file:
-                        out_file.write(response.read())
-                    file_path = temp_path
-                    # ダウンロードした一時ファイルをリストに追加
-                    self.temp_files.append(file_path)
-                except Exception as e:
-                    QMessageBox.warning(self, "エラー", f"画像のダウンロードに失敗しました:\n{e}")
-                    continue
+                        candidate1 = "https://dm.takaratomy.co.jp/wp-content/card/cardthumb/" + card_id + ".jpg"
+                        candidate2 = "https://dm.takaratomy.co.jp/wp-content/card/cardthumb/" + card_id + "a.jpg"
+                        print("Converted detail URL to image URL candidates:", candidate1, candidate2)
+                        success = False
+                        file_path = None
+                        for candidate in [candidate1, candidate2]:
+                            try:
+                                temp_fd, temp_path = tempfile.mkstemp(suffix=".jpg")
+                                os.close(temp_fd)
+                                req = urllib.request.Request(candidate, headers={'User-Agent': 'Mozilla/5.0'})
+                                with urllib.request.urlopen(req) as response, open(temp_path, 'wb') as out_file:
+                                    out_file.write(response.read())
+                                pixmap = QPixmap(temp_path)
+                                if not pixmap.isNull():
+                                    file_path = temp_path
+                                    success = True
+                                    break
+                                else:
+                                    os.remove(temp_path)
+                                    print("Candidate failed (invalid image):", candidate)
+                            except Exception as e:
+                                print("Failed candidate:", candidate, "Error:", e)
+                        if not success:
+                            QMessageBox.warning(self, "エラー", f"画像のダウンロードに失敗しました:\n{remote_url}")
+                            continue
+                        self.temp_files.append(file_path)
+                    else:
+                        continue
+                else:
+                    ext = os.path.splitext(remote_url)[1]
+                    if not ext:
+                        ext = ".jpg"
+                    temp_fd, temp_path = tempfile.mkstemp(suffix=ext)
+                    os.close(temp_fd)
+                    try:
+                        req = urllib.request.Request(remote_url, headers={'User-Agent': 'Mozilla/5.0'})
+                        with urllib.request.urlopen(req) as response, open(temp_path, 'wb') as out_file:
+                            out_file.write(response.read())
+                        file_path = temp_path
+                        self.temp_files.append(file_path)
+                    except Exception as e:
+                        QMessageBox.warning(self, "エラー", f"画像のダウンロードに失敗しました:\n{e}")
+                        continue
             print("File path:", file_path)
             pixmap = QPixmap(file_path)
             if pixmap.isNull():
@@ -269,7 +295,6 @@ class CardProxyApp(QWidget):
         event.acceptProposedAction()
     
     def closeEvent(self, event):
-        # プログラム終了時に、一時ファイルを削除
         for file in self.temp_files:
             if os.path.exists(file):
                 try:
