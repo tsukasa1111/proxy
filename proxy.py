@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QDialog, QScrollArea, QComboBox
 )
 from PyQt5.QtCore import QUrl, Qt
-from PyQt5.QtGui import QDesktopServices, QPixmap
+from PyQt5.QtGui import QDesktopServices, QPixmap, QIcon
 
 from reportlab.lib.pagesizes import A4, A3, portrait, landscape
 from reportlab.lib.units import mm
@@ -80,6 +80,7 @@ class CardProxyApp(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("プロキシ生成ツール")
+        self.setAcceptDrops(True)  # ドラッグ＆ドロップを有効にする
         self.init_ui()
         
     def init_ui(self):
@@ -136,19 +137,27 @@ class CardProxyApp(QWidget):
         )
         if files:
             for file in files:
-                row = self.table.rowCount()
-                self.table.insertRow(row)
-                # 表示はファイル名のみ、実際のパスはUserRoleに保持
-                base_name = os.path.basename(file)
-                item = QTableWidgetItem(base_name)
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                item.setData(Qt.UserRole, file)
-                self.table.setItem(row, 0, item)
-                # 印刷枚数はQSpinBoxで設定（初期値は1）
-                spin = QSpinBox()
-                spin.setMinimum(1)
-                spin.setValue(1)
-                self.table.setCellWidget(row, 1, spin)
+                self.add_image_to_table(file)
+    
+    def add_image_to_table(self, file):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        # 表示はファイル名のみ、実際のパスはUserRoleに保持
+        base_name = os.path.basename(file)
+        item = QTableWidgetItem(base_name)
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        item.setData(Qt.UserRole, file)
+        # サムネイル画像を作成してアイコンとして設定（サイズは64x64）
+        pixmap = QPixmap(file)
+        if not pixmap.isNull():
+            thumb = pixmap.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            item.setIcon(QIcon(thumb))
+        self.table.setItem(row, 0, item)
+        # 印刷枚数はQSpinBoxで設定（初期値は1）
+        spin = QSpinBox()
+        spin.setMinimum(1)
+        spin.setValue(1)
+        self.table.setCellWidget(row, 1, spin)
     
     def remove_selected(self):
         selected = self.table.selectedItems()
@@ -221,6 +230,20 @@ class CardProxyApp(QWidget):
         if file_path:
             create_pdf(image_quantity_list, file_path, page_option)
             QMessageBox.information(self, "完了", f"PDFが生成されました:\n{file_path}")
+
+    # ドラッグ＆ドロップ対応：ファイルドロップイベント
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+    
+    def dropEvent(self, event):
+        for url in event.mimeData().urls():
+            file = url.toLocalFile()
+            if file.lower().endswith((".jpg", ".png")):
+                self.add_image_to_table(file)
+        event.acceptProposedAction()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
