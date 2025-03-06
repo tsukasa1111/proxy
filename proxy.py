@@ -7,7 +7,7 @@ import re
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QPushButton, QLabel, QFileDialog, QMessageBox,
-    QTableWidget, QTableWidgetItem, QSpinBox, QHeaderView,
+    QTableWidget, QTableWidgetItem, QSpinBox, QDoubleSpinBox, QHeaderView,
     QDialog, QScrollArea, QComboBox, QCheckBox, QMenu
 )
 from PyQt5.QtCore import QUrl, Qt, QSize, QPoint
@@ -21,52 +21,75 @@ from reportlab.pdfgen import canvas
 def draw_image(pc: canvas.Canvas, page_size, image, x, y, w, h):
     pc.drawImage(image, x, page_size[1] - y - h, w, h)
 
-# 左上を原点として矩形を描画（ガイドライン用）
+# 左上を原点として矩形（ガイドライン）を描画
 def fill_rect(pc: canvas.Canvas, page_size, x, y, w, h, color=(1, 1, 1)):
     pc.setStrokeColorRGB(*color)
     pc.rect(x, page_size[1] - y - h, w, h, stroke=False, fill=True)
 
-# 各画像とその印刷枚数のリストをもとにPDFを生成
-def create_pdf(image_quantity_list, output_file, page_option, draw_guidelines=True, remove_margin=False):
+# 画像と枚数リストからPDFを生成
+def create_pdf(image_quantity_list, output_file, page_option, draw_guidelines=True, remove_margin=False, card_size_mode="標準サイズ", custom_card_size=None):
+    # ページサイズの設定（A3 は横置き、A4 は縦置き）
     if page_option == "A3":
         ps = landscape(A3)
-        grid_x = 6    # 横6枚
-        grid_y = 3    # 縦3枚 (計18枚／ページ)
-        begin = (22 * mm, 17 * mm)
-    else:  # "A4"
+    else:
         ps = portrait(A4)
-        grid_x = 3    # 横3枚
-        grid_y = 3    # 縦3枚 (計9枚／ページ)
-        begin = (11 * mm, 17 * mm)
+    
+    # カードサイズの決定
+    if card_size_mode == "標準サイズ":
+        card_width, card_height = 63.5 * mm, 88.9 * mm
+    elif card_size_mode == "任意のサイズ":
+        if custom_card_size is not None:
+            card_width, card_height = custom_card_size[0] * mm, custom_card_size[1] * mm
+        else:
+            card_width, card_height = 63.5 * mm, 88.9 * mm
+    else:
+        card_width, card_height = 63.5 * mm, 88.9 * mm
 
-    card_size = (63 * mm, 88 * mm)
-    margin = (0 * mm, 0 * mm) if remove_margin else (1 * mm, 1 * mm)
+    # カード間の隙間（余白）
+    h_gap = 0 * mm if remove_margin else 1 * mm
+    v_gap = 0 * mm if remove_margin else 1 * mm
+
+    # ページ全体の幅・高さを使ってグリッド数を計算
+    grid_x = int((ps[0] + h_gap) // (card_width + h_gap))
+    grid_y = int((ps[1] + v_gap) // (card_height + v_gap))
+    if grid_x < 1: grid_x = 1
+    if grid_y < 1: grid_y = 1
     total_per_page = grid_x * grid_y
+
+    # 配置開始位置（左上端 = (0,0)）
+    x_start = 0
+    y_start = 0
 
     pc = canvas.Canvas(output_file, pagesize=ps)
     images = []
     for image, qty in image_quantity_list:
         images.extend([image] * qty)
+
     for i, image in enumerate(images):
-        x_pos = i % grid_x
-        y_pos = (i % total_per_page) // grid_x
-        x = begin[0] + x_pos * (card_size[0] + margin[0])
-        y = begin[1] + y_pos * (card_size[1] + margin[1])
-        draw_image(pc, ps, image, x, y, *card_size)
-        if (x_pos, y_pos) == (grid_x - 1, grid_y - 1) or i == len(images) - 1:
+        page_index = i % total_per_page
+        col = page_index % grid_x
+        row = page_index // grid_x
+        x = x_start + col * (card_width + h_gap)
+        y = y_start + row * (card_height + v_gap)
+        draw_image(pc, ps, image, x, y, card_width, card_height)
+
+        # ページの最後または最終画像でページを確定
+        if (page_index == total_per_page - 1) or (i == len(images) - 1):
             if draw_guidelines:
+                # 縦方向ガイドライン：ページ全体の高さまで
                 for col in range(grid_x + 1):
                     if col == 0:
-                        x_line = begin[0] - margin[0]
+                        x_line = x_start
                     else:
-                        x_line = begin[0] + col * card_size[0] + (col - 1) * margin[0]
-                    fill_rect(pc, ps, x_line, 0, margin[0], ps[1])
+                        x_line = x_start + col * (card_width + h_gap) - h_gap
+                    fill_rect(pc, ps, x_line, 0, h_gap, ps[1])
+                # 横方向ガイドライン：ページ全体の幅まで
                 for row in range(grid_y + 1):
                     if row == 0:
-                        y_line = begin[1] - margin[1]
+                        y_line = y_start
                     else:
-                        y_line = begin[1] + row * card_size[1] + (row - 1) * margin[1]
-                    fill_rect(pc, ps, 0, y_line, ps[0], margin[1])
+                        y_line = y_start + row * (card_height + v_gap) - v_gap
+                    fill_rect(pc, ps, 0, y_line, ps[0], v_gap)
             pc.showPage()
     pc.save()
 
@@ -76,29 +99,68 @@ class CardProxyApp(QWidget):
         super().__init__()
         self.setWindowTitle("プロキシ生成ツール")
         self.setAcceptDrops(True)
-        self.temp_files = []  # 一時ファイルのパスを保持するリスト
+        self.temp_files = []  # 一時ファイルパス保持用
         self.init_ui()
         
     def init_ui(self):
         layout = QVBoxLayout()
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
-
-        # オプションエリア（グループボックス）
+        
+        # オプションエリア（グループボックス）のレイアウト内に「i」ボタンを右端に配置
         options_group = QGroupBox("オプション")
         options_layout = QHBoxLayout()
-        size_label = QLabel("ページサイズ:")
+        
+        # ページサイズ選択
+        page_label = QLabel("ページサイズ:")
         self.page_combo = QComboBox()
         self.page_combo.addItems(["A4", "A3"])
-        options_layout.addWidget(size_label)
+        options_layout.addWidget(page_label)
         options_layout.addWidget(self.page_combo)
+        
+        # カードサイズ選択（「標準サイズ」と「任意のサイズ」）
+        size_label = QLabel("カードサイズ:")
+        self.size_combo = QComboBox()
+        self.size_combo.addItems(["標準サイズ", "任意のサイズ"])
+        options_layout.addWidget(size_label)
+        options_layout.addWidget(self.size_combo)
+        self.size_combo.currentTextChanged.connect(self.on_size_combo_changed)
+        
+        # 任意のサイズ入力領域（初期は非表示）
+        self.custom_size_widget = QWidget()
+        custom_layout = QHBoxLayout()
+        custom_layout.setContentsMargins(0, 0, 0, 0)
+        custom_layout.addWidget(QLabel("幅(mm):"))
+        self.custom_width_spin = QDoubleSpinBox()
+        self.custom_width_spin.setRange(1, 500)
+        self.custom_width_spin.setDecimals(1)
+        self.custom_width_spin.setValue(63)
+        custom_layout.addWidget(self.custom_width_spin)
+        custom_layout.addWidget(QLabel("高さ(mm):"))
+        self.custom_height_spin = QDoubleSpinBox()
+        self.custom_height_spin.setRange(1, 500)
+        self.custom_height_spin.setDecimals(1)
+        self.custom_height_spin.setValue(88)
+        custom_layout.addWidget(self.custom_height_spin)
+        self.custom_size_widget.setLayout(custom_layout)
+        self.custom_size_widget.setVisible(False)
+        options_layout.addWidget(self.custom_size_widget)
+        
+        # ガイドライン・余白オプション
         self.guidelines_checkbox = QCheckBox("ガイドラインを描画")
         self.guidelines_checkbox.setChecked(True)
         options_layout.addWidget(self.guidelines_checkbox)
         self.margin_checkbox = QCheckBox("余白を削除")
         self.margin_checkbox.setChecked(False)
         options_layout.addWidget(self.margin_checkbox)
+        
+        # 右端に余白を入れて「i」ボタンを配置
         options_layout.addStretch()
+        info_button = QPushButton("i")
+        info_button.setMaximumSize(30, 30)
+        info_button.clicked.connect(self.show_help)
+        options_layout.addWidget(info_button)
+        
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
         self.margin_checkbox.stateChanged.connect(self.update_options)
@@ -112,7 +174,7 @@ class CardProxyApp(QWidget):
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         layout.addWidget(self.table)
 
-        # 画像追加と削除ボタンエリア
+        # 画像追加・削除ボタンエリア
         btn_layout = QHBoxLayout()
         self.add_button = QPushButton("画像追加")
         self.add_button.clicked.connect(self.add_images)
@@ -123,7 +185,7 @@ class CardProxyApp(QWidget):
         btn_layout.addWidget(self.delete_button)
         layout.addLayout(btn_layout)
 
-        # プレビュー／生成ボタンエリア（ボタン色は特に設定せず）
+        # プレビュー／生成ボタンエリア
         btn_layout2 = QHBoxLayout()
         self.preview_button = QPushButton("プレビュー")
         self.preview_button.clicked.connect(self.preview_pdf)
@@ -138,6 +200,24 @@ class CardProxyApp(QWidget):
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_context_menu)
         self.table.itemSelectionChanged.connect(self.update_delete_button)
+    
+    def show_help(self):
+        help_text = (
+            "【使い方】\n\n"
+            "1. 画像追加ボタンまたはドラッグ＆ドロップでカード画像を追加します。\n"
+            "2. 各画像に対して印刷枚数を設定してください。\n"
+            "3. オプションでページサイズ（A4 または A3）とカードサイズを設定できます。\n"
+            "   カードサイズの選択肢は「標準サイズ」と「任意のサイズ」です。\n"
+            "   標準サイズは 63.5mm × 88.9mm となっています。\n"
+            "   任意のサイズを選択した場合は、右側の入力欄に幅と高さ（単位: mm）を入力してください。\n"
+            "4. ガイドラインや余白の表示・削除も設定可能です。\n"
+            "5. プレビューでPDFの配置を確認し、生成ボタンでPDFファイルとして保存します。\n"
+            "※ ドラッグ＆ドロップにも対応しています。"
+        )
+        QMessageBox.information(self, "使い方", help_text)
+    
+    def on_size_combo_changed(self, text):
+        self.custom_size_widget.setVisible(text == "任意のサイズ")
     
     def update_options(self):
         if self.margin_checkbox.isChecked():
@@ -182,7 +262,6 @@ class CardProxyApp(QWidget):
         spin.setMinimum(1)
         spin.setValue(1)
         spin.setMinimumHeight(40)
-        # スタイルシートでフォントサイズ、パディング、矢印ボタンのサイズを大きくする
         spin.setStyleSheet("""
             QSpinBox { font-size: 16pt; padding: 5px; min-width: 80px; }
             QSpinBox::up-button, QSpinBox::down-button { width: 30px; height: 30px; }
@@ -237,11 +316,13 @@ class CardProxyApp(QWidget):
             QMessageBox.critical(self, "エラー", "画像が選択されていません")
             return
         page_option = self.page_combo.currentText()
+        card_size_mode = self.size_combo.currentText()
+        custom_size = (self.custom_width_spin.value(), self.custom_height_spin.value()) if card_size_mode == "任意のサイズ" else None
         draw_guidelines = self.guidelines_checkbox.isChecked()
         remove_margin = self.margin_checkbox.isChecked()
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
         temp_file.close()
-        create_pdf(image_quantity_list, temp_file.name, page_option, draw_guidelines, remove_margin)
+        create_pdf(image_quantity_list, temp_file.name, page_option, draw_guidelines, remove_margin, card_size_mode, custom_size)
         QDesktopServices.openUrl(QUrl.fromLocalFile(temp_file.name))
         self.temp_files.append(temp_file.name)
     
@@ -251,13 +332,15 @@ class CardProxyApp(QWidget):
             QMessageBox.critical(self, "エラー", "画像が選択されていません")
             return
         page_option = self.page_combo.currentText()
+        card_size_mode = self.size_combo.currentText()
+        custom_size = (self.custom_width_spin.value(), self.custom_height_spin.value()) if card_size_mode == "任意のサイズ" else None
         draw_guidelines = self.guidelines_checkbox.isChecked()
         remove_margin = self.margin_checkbox.isChecked()
         file_path, _ = QFileDialog.getSaveFileName(
             self, "保存先を選択", "output.pdf", "PDF Files (*.pdf)"
         )
         if file_path:
-            create_pdf(image_quantity_list, file_path, page_option, draw_guidelines, remove_margin)
+            create_pdf(image_quantity_list, file_path, page_option, draw_guidelines, remove_margin, card_size_mode, custom_size)
             QMessageBox.information(self, "完了", f"PDFが生成されました:\n{file_path}")
 
     def dragEnterEvent(self, event):
