@@ -4,6 +4,51 @@
 PyQt5 を用いたGUIにより、画像ファイルの追加・管理、印刷枚数の設定、プレビュー、PDF生成が可能です。  
 また、PDF生成時には A4（縦向き）と A3（横向き）のページサイズをUI上で切り替えられ、グリッドレイアウトはページ全体の幅と高さから動的に計算されます。
 
+---
+
+## 🔄 補助スクリプト：ガチまとめ画像ダウンローダー
+
+本ツールと組み合わせて使用できる、**ガチまとめからカード画像を取得するPythonスクリプト（deck_image_downloader.py）** を同梱しています。
+
+### 🔧 機能概要
+- [ガチまとめ](https://gachi-matome.com) のデッキレシピURLを入力すると、ページ内の高画質カード画像をすべて取得し、ローカルの指定フォルダに保存します。
+- カードの登場回数に応じて複数枚保存されます（例：2枚使われていれば2ファイル保存）。
+- ファイル名は `001_ファイル名.jpg` のように連番で保存されます。
+
+### ✅ 使用方法
+
+1. 仮想環境を作成・有効化：
+
+```bash
+python3 -m venv venv-selenium
+source venv-selenium/bin/activate
+```
+
+2. 必要なパッケージをインストール：
+
+```bash
+pip install selenium webdriver-manager requests
+```
+
+3. スクリプトを実行：
+
+```bash
+python deck_image_downloader.py
+```
+
+4. 実行後、以下のような入力が求められます：
+
+```plaintext
+デッキのURLを入力してください: https://gachi-matome.com/deckrecipe-detail-dm/?tcgrevo_deck_maker_deck_id=xxxx
+保存フォルダ名を入力してください: downloaded_cards
+```
+
+### 📁 出力内容
+- 指定したフォルダに、カード画像が出現枚数分保存されます。
+- 保存された画像は本ツールのGUIにドラッグ＆ドロップで読み込むことができます。
+
+---
+
 ## 特徴
 
 - **画像の追加と管理**  
@@ -99,4 +144,3 @@ pip install PyQt5 reportlab
 
 - **一時ファイルの自動削除**  
   - Webから取得した画像およびプレビュー用PDFは、プログラム終了時に自動で削除され、不要なファイルが残りません。
-```
